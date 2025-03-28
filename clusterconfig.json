@@ -1,0 +1,33 @@
+{
+    "metadata": {
+      "name": "mk8s-node-group-reza"
+    },
+    "spec": {
+      "version": "1.30",
+      "fixed_node_count": 2,
+      "template": {
+        "resources": {
+          "platform": "gpu-h100-sxm",
+          "preset": "1gpu-16vcpu-200gb"
+        },
+        "gpu_settings": {
+          "drivers_preset": "cuda12"
+        },
+        "boot_disk": {
+          "type": "NETWORK_SSD",
+          "size_gibibytes": 1000
+        },
+        "filesystems": [
+        {
+          "attach_mode": "READ_WRITE",
+          "mount_tag": "$MOUNT_TAG",
+          "existing_filesystem": {
+            "id": "$NB_FS_ID"
+          }
+        }
+      ],
+      "cloud_init_user_data": "$USER_DATA",
+      "service_account_id": "$NB_MK8S_SA_ID"
+      }
+    }
+}
