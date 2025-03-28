@@ -14,13 +14,13 @@ Prepare an end-to-end example of multi-node fine-tuning of an LLM
 
 ## Create Control Plane
 ```bash
-    nebius mk8s cluster create \
-    --name reza-k8s1 \
-    --control-plane-version 1.30 \
-    --control-plane-subnet-id \
-        $(nebius vpc subnet list --format json \
-        | jq -r '.items[0].metadata.id') \
-    --control-plane-endpoints-public-endpoint=true
+nebius mk8s cluster create \
+--name reza-k8s1 \
+--control-plane-version 1.30 \
+--control-plane-subnet-id \
+    $(nebius vpc subnet list --format json \
+    | jq -r '.items[0].metadata.id') \
+--control-plane-endpoints-public-endpoint=true
 ```
 
 ## Get the service account for the nodegroup
@@ -58,21 +58,21 @@ EOF
 
 ## Get the cluster id
 ```bash
-    export NB_K8S_CLUSTER_ID=$(nebius mk8s cluster get-by-name \
-    --name reza-k8s1 --format json | jq -r '.metadata.id')
-    echo $NB_K8S_CLUSTER_ID
+export NB_K8S_CLUSTER_ID=$(nebius mk8s cluster get-by-name \
+--name reza-k8s1 --format json | jq -r '.metadata.id')
+echo $NB_K8S_CLUSTER_ID
 ```
 
 ## Create Node Group
 ```bash
-    nebius mk8s node-group create \
-    --parent-id $NB_K8S_CLUSTER_ID \
-    -f clusterconfig.json
+nebius mk8s node-group create \
+--parent-id $NB_K8S_CLUSTER_ID \
+-f clusterconfig.json
 ```
 
 ## Get the credential and create kubeconfig
 ```bash
-    nebius mk8s cluster get-credentials --id $NB_K8S_CLUSTER_ID --external
+nebius mk8s cluster get-credentials --id $NB_K8S_CLUSTER_ID --external
 ```    
 
 ## Install the CSI driver
@@ -90,9 +90,9 @@ helm upgrade csi-mounted-fs-path ./csi-mounted-fs-path-0.1.2.tgz --install \
 
 ## Delete the node group
 ```bash
-    export NB_K8S_NODE_GROUP_ID=$(nebius mk8s node-group get-by-name \
-    --parent-id $NB_K8S_CLUSTER_ID \
-    --name mk8s-node-group-reza --format json | jq -r '.metadata.id')
-    echo $NB_K8S_NODE_GROUP_ID
-    nebius mk8s node-group delete --id $NB_K8S_NODE_GROUP_ID
+export NB_K8S_NODE_GROUP_ID=$(nebius mk8s node-group get-by-name \
+--parent-id $NB_K8S_CLUSTER_ID \
+--name mk8s-node-group-reza --format json | jq -r '.metadata.id')
+echo $NB_K8S_NODE_GROUP_ID
+nebius mk8s node-group delete --id $NB_K8S_NODE_GROUP_ID
 ```
