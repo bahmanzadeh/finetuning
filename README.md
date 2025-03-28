@@ -15,13 +15,13 @@ an LLM
 
 ## Create Control Plane
 ```bash
-  nebius mk8s cluster create \
-  --name reza-k8s1 \
-  --control-plane-version 1.30 \
-  --control-plane-subnet-id \
-    $(nebius vpc subnet list --format json \
-    | jq -r '.items[0].metadata.id') \
-  --control-plane-endpoints-public-endpoint=true
+    nebius mk8s cluster create \
+    --name reza-k8s1 \
+    --control-plane-version 1.30 \
+    --control-plane-subnet-id \
+        $(nebius vpc subnet list --format json \
+        | jq -r '.items[0].metadata.id') \
+    --control-plane-endpoints-public-endpoint=true
 ```
 ## Get the cluster id
 ```bash
