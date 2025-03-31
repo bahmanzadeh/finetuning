@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tensorboard
+  labels:
+    app: tensorboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tensorboard
+  template:
+    metadata:
+      labels:
+        app: tensorboard
+    spec:
+      containers:
+        - name: tensorboard
+          image: tensorflow/tensorflow:latest  # TensorFlow image with TensorBoard
+          command:
+            - /bin/bash
+            - -c
+            - |
+              tensorboard --logdir=/shared --host=0.0.0.0 --port=6006
+          ports:
+            - containerPort: 6006
+          volumeMounts:
+            - name: shared-fs
+              mountPath: /shared  # Mount the shared filesystem
+      volumes:
+        - name: shared-fs
+          persistentVolumeClaim:
+            claimName: shared-fs-pvc  # Use the same PVC as your training job

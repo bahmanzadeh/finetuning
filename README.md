@@ -69,7 +69,42 @@ nebius mk8s node-group create \
 --parent-id $NB_K8S_CLUSTER_ID \
 -f clusterconfig.json
 ```
-
+## Here is the CLI command in case the json file didn't work
+```bash
+export NB_K8S_NODE_TEMPLATE=$(cat <<EOF
+{
+  "spec": {
+    "template": {
+      "filesystems": [
+        {
+          "attach_mode": "READ_WRITE",
+          "mount_tag": "$MOUNT_TAG",
+          "existing_filesystem": {
+            "id": "$NB_FS_ID"
+          }
+        }
+      ],
+      "cloud_init_user_data": $USER_DATA
+    }
+  }
+}
+EOF
+```
+And now you can run the CLI
+```bash
+nebius mk8s node-group create \
+  --parent-id $NB_K8S_CLUSTER_ID \
+  --name mk8s-node-group-reza \
+  --fixed-node-count 2 \
+  --template-service-account-id $NB_MK8S_SA_ID \
+  --template-resources-platform gpu-h100-sxm \
+  --template-resources-preset 1gpu-16vcpu-200gb \
+  --template-gpu-settings-drivers-preset cuda12 \
+  --template-boot-disk-type network_ssd \
+  --template-boot-disk-size-gibibytes 1000 \
+  -- "$NB_K8S_NODE_TEMPLATE"
+ ```
+ 
 ## Get the credential and create kubeconfig
 ```bash
 nebius mk8s cluster get-credentials --id $NB_K8S_CLUSTER_ID --external
@@ -86,6 +121,17 @@ helm pull \
 ```bash
 helm upgrade csi-mounted-fs-path ./csi-mounted-fs-path-0.1.2.tgz --install \
   --set dataDir=$MOUNT_POINT/csi-mounted-fs-path-data/
+```
+## Build and Deployment
+```bash
+docker build -t rezabah/distilbert-ft:v1 .
+docker push rezabah/distilbert-ft:v1
+kubectl apply -f pvc.yaml -n finetune
+kubectl apply -f master-service.yaml -n finetune
+kubectl apply -f fine-tune-job.yaml -n finetune
+kubectl apply -f tensorboard-deploy.yaml -n finetune
+kubectl apply -f tensorboard-service.yaml -n finetune
+kubectl port-forward service/tensorboard-service 6006:6006 -n finetune
 ```
 
 ## Delete the node group

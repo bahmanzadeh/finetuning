@@ -1,0 +1,12 @@
+# pvs for training
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: shared-fs-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Ti
+  storageClassName: csi-mounted-fs-path-sc
