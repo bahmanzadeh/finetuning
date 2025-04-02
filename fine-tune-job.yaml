@@ -12,63 +12,86 @@ spec:
         app: fine-tune
     spec:
       restartPolicy: Never
+      serviceAccountName: fine-tune-sa
       containers:
       - name: fine-tune-container
         imagePullPolicy: Always
         image: rezabah/distilbert-ft:v1
         # Command is set in the Dockerfile ENTRYPOINT; arguments below will be appended
         args:
-          - "--experiment_name=experiment-$(JOB_ID)"
-          - "--batch_size=$(BATCH_SIZE)"
-          - "--epochs=$(EPOCHS)"
-          - "--learning_rate=$(LEARNING_RATE)"
-          - "--shared_fs_path=/shared"
-          - "--push_to_hub" 
-          - "--hub_model_id=$(HUB_MODEL_ID)"
-          - "--hub_token=$(HUB_TOKEN)"
+        - "--experiment_name=experiment-$(JOB_ID)"
+        - "--batch_size=$(BATCH_SIZE)"
+        - "--epochs=$(EPOCHS)"
+        - "--learning_rate=$(LEARNING_RATE)"
+        - "--shared_fs_path=/shared"
+        - "--train_dataset_range=$(TRAIN_DATASET_RANGE)"
+        - "--eval_dataset_range=$(EVAL_DATASET_RANGE)"
         env:
-          # Distributed training environment variables:
-          - name: NNODES
-            value: "2"
-          - name: NPROC_PER_NODE
-            value: "1"
-          - name: MASTER_ADDR
-            value: "master-service"  # headless service of the master node
-          - name: MASTER_PORT
-            value: "29500"
-          - name: JOB_ID
-            valueFrom:
-              fieldRef:
-                fieldPath: metadata.name   # unique value
-          - name: BATCH_SIZE
-            value: "16"
-          - name: EPOCHS
-            value: "3"
-          - name: LEARNING_RATE
-            value: "2e-5"
-          - name: TOKENIZERS_PARALLELISM
-            value: "false"            
-          - name: HUB_MODEL_ID
-            value: "rezabahmanzad/fine-tune-distilbert-base-uncased-$(JOB_ID)"  # unique value for the finetuned model to be pushed
-          - name: HUB_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: hf-secret
-                key: hub-token
+        # Distributed training environment variables:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: NODE_RANK
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+        - name: WORLD_SIZE
+          value: "2" # Total number of processes (2 nodes * 1 GPU per node)
+        - name: NNODES
+          value: "2" # Total number of nodes
+        - name: NPROC_PER_NODE
+          value: "1" # Number of GPUs per node
+        - name: MASTER_ADDR
+          value: "master-service" # Headless service of the master node
+        - name: MASTER_PORT
+          value: "29501" # Port for DDP communication
+        - name: JOB_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name # Unique value for the job
+        - name: BATCH_SIZE
+          value: "16"
+        - name: EPOCHS
+          value: "3"
+        - name: LEARNING_RATE
+          value: "2e-5"
+        - name: TOKENIZERS_PARALLELISM
+          value: "false"
+        - name: TRAIN_DATASET_RANGE
+          value: "1000" # Default value for training dataset range
+        - name: EVAL_DATASET_RANGE
+          value: "200" # Default value for evaluation dataset range
         resources:
           requests:
-            memory: "10Gi"   # Minimum memory guaranteed for the pod
-            cpu: "4"         # Minimum CPU guaranteed for the pod
-          #  ephemeral-storage: "20Gi"  # Minimum ephemeral storage guaranteed for the pod
+            memory: "10Gi" # Minimum memory guaranteed for the pod
+            cpu: "4" # Minimum CPU guaranteed for the pod
           limits:
-            memory: "150Gi"  # Maximum memory the pod can use
-            cpu: "12"        # Maximum CPU the pod can use
-          #  ephemeral-storage: "200Gi"  # Maximum ephemeral storage the pod can use
-            nvidia.com/gpu: 1
+            memory: "150Gi" # Maximum memory the pod can use
+            cpu: "12" # Maximum CPU the pod can use
+            nvidia.com/gpu: "1"
         volumeMounts:
-          - name: shared-fs
-            mountPath: /shared
-      volumes:
         - name: shared-fs
-          persistentVolumeClaim:
-            claimName: shared-fs-pvc
+          mountPath: /shared
+      volumes:
+      - name: shared-fs
+        persistentVolumeClaim:
+          claimName: shared-fs-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: master-service
+spec:
+  clusterIP: None
+  selector:
+    app: fine-tune
+    role: master
+  ports:
+  - protocol: TCP
+    port: 29501 # Port for DDP communication to master node/pod
+    targetPort: 29501

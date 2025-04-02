@@ -1,119 +1,190 @@
 import argparse
 import os
-import numpy as np
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader, DistributedSampler
 from datasets import load_dataset
-import evaluate
 from transformers import (
-    AutoTokenizer, 
-    AutoModelForSequenceClassification, 
-    TrainingArguments, 
-    Trainer,
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    get_scheduler,
     DataCollatorWithPadding
 )
-import torch
-from accelerate import Accelerator
+from tqdm.auto import tqdm
 
-def compute_metrics(eval_pred):
-    logits, labels = eval_pred
-    metric = evaluate.load("accuracy")
-    predictions = np.argmax(logits, axis=-1)
-    acc = metric.compute(predictions=predictions, references=labels)
-    return acc
 
-def main(args):
-    # Initialize Accelerator
-    accelerator = Accelerator()
+def setup(rank, world_size):
+    """Initialize the process group for distributed training."""
+    local_rank = int(os.environ["LOCAL_RANK"])  # Local rank (GPU index on the current node)
 
-    # Log node_rank and local_rank
-    node_rank = int(os.environ.get("NODE_RANK", 0))  # Get NODE_RANK from environment
-    local_rank = accelerator.local_process_index  # Get local rank from Accelerator
-    print(f"Node Rank: {node_rank}, Local Rank: {local_rank}")
+    # Initialize the process group
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
 
-    # Set up logging directory on shared filesystem
-    output_dir = os.path.join(args.shared_fs_path, args.experiment_name)
-    os.makedirs(output_dir, exist_ok=True)
+    # Set the device to the local rank
+    torch.cuda.set_device(local_rank)
 
-    # Validate Hugging Face Hub arguments
-    if args.push_to_hub and (not args.hub_model_id or not args.hub_token):
-        raise ValueError("Both --hub_model_id and --hub_token are required when --push_to_hub is set.")
+    # Debug information
+    print(f"[Rank {rank}] Process group initialized.")
+    print(f"[Rank {rank}] Backend: {dist.get_backend()}")
+    print(f"[Rank {rank}] World Size: {dist.get_world_size()}")
+    print(f"[Rank {rank}] Master Address: {os.environ.get('MASTER_ADDR', 'Not Set')}")
+    print(f"[Rank {rank}] Master Port: {os.environ.get('MASTER_PORT', 'Not Set')}")
+    print(f"[Rank {rank}] Current Device: {torch.cuda.current_device()}")
 
-    # Load dataset (SST-2 from GLUE)
-    try:
-        dataset = load_dataset("glue", "sst2")
-    except Exception as e:
-        print(f"Error loading dataset: {e}")
-        return
 
-    # Use a small subset for demonstration
-    train_dataset = dataset["train"].shuffle(seed=42).select(range(1000))
-    eval_dataset = dataset["validation"].select(range(200))
+def cleanup():
+    """Destroy the process group after training."""
+    dist.destroy_process_group()
 
-    # Load pre-trained model and tokenizer (DistilBERT)
+
+def load_model_with_barrier(model_name, num_labels=2, ignore_mismatched_sizes=True):
+    """Load a model with a distributed barrier to avoid concurrent downloads."""
+    os.environ["TRANSFORMERS_NO_ADVISORY_LOCKS"] = "1"
+
+    if dist.get_rank() == 0:
+        # Rank 0 downloads the model
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            num_labels=num_labels,
+            ignore_mismatched_sizes=ignore_mismatched_sizes
+        )
+    dist.barrier()  # Synchronize all processes
+    if dist.get_rank() != 0:
+        # Other ranks load the model after synchronization
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            num_labels=num_labels,
+            ignore_mismatched_sizes=ignore_mismatched_sizes
+        )
+    return model
+
+
+def train(rank, world_size, args):
+    """Main training function for each process."""
+    # Setup distributed training
+    setup(rank, world_size)
+
+    # Debug: Print rank-specific information
+    print(f"[Rank {rank}] Starting training with world size {world_size}.")
+    local_rank = int(os.environ["LOCAL_RANK"])
+    # Load dataset
+    dataset = load_dataset("glue", "sst2")
+    train_dataset = dataset["train"].shuffle(seed=42).select(range(args.train_dataset_range))
+    eval_dataset = dataset["validation"].select(range(args.eval_dataset_range))
+
+    # Load tokenizer
     model_name = "distilbert-base-uncased"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
 
-    # Preprocess function for text classification
+    # Load model using the barrier function
+    # model = load_model_with_barrier(model_name).to(rank)
+    
+    # load model
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_name,
+        num_labels=2,
+        ignore_mismatched_sizes=True
+    ).to(local_rank)
+
+    # Preprocess datasets
     def preprocess_function(examples):
-        return tokenizer(examples['sentence'], truncation=True, padding=True, max_length=128)
+        return tokenizer(examples["sentence"], truncation=True, padding="max_length", max_length=128)
 
     train_dataset = train_dataset.map(preprocess_function, batched=True)
     eval_dataset = eval_dataset.map(preprocess_function, batched=True)
 
-    # Prepare model, datasets, and optimizer with Accelerator
-    model, train_dataset, eval_dataset = accelerator.prepare(model, train_dataset, eval_dataset)
+    train_dataset.set_format("torch", columns=["input_ids", "attention_mask", "label"])
+    eval_dataset.set_format("torch", columns=["input_ids", "attention_mask", "label"])
 
-    # Set up TrainingArguments
-    training_args = TrainingArguments(
-        output_dir=output_dir,
-        num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.batch_size,
-        per_device_eval_batch_size=args.batch_size,
-        learning_rate=args.learning_rate,
-        logging_steps=10,
-        eval_strategy="epoch",  # Replace evaluation_strategy with eval_strategy
-        save_strategy="epoch",
-        load_best_model_at_end=True,
-        push_to_hub=args.push_to_hub,
-        hub_model_id=args.hub_model_id if args.push_to_hub else None,
-        hub_token=args.hub_token if args.push_to_hub else None,
-        report_to="tensorboard",
-    )
+    # Distributed sampler
+    train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True)
+    eval_sampler = DistributedSampler(eval_dataset, num_replicas=world_size, rank=rank, shuffle=False)
 
-    # Create a data collator
+    # Data loaders
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
+    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.batch_size, collate_fn=data_collator)
+    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.batch_size, collate_fn=data_collator)
 
-    # Create Trainer for fine-tuning
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        compute_metrics=compute_metrics,
-        data_collator=data_collator,
-    )
+    # Wrap model with DDP
+    model = DDP(model, device_ids=[local_rank])
 
-    # Fine-tune model
-    print("Starting fine-tuning...")
-    trainer.train()
-    metrics = trainer.evaluate(eval_dataset=eval_dataset)
-    print("Fine-tuned metrics:", metrics)
+    # Optimizer and scheduler
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+    num_training_steps = args.epochs * len(train_dataloader)
+    lr_scheduler = get_scheduler("linear", optimizer=optimizer, num_warmup_steps=0, num_training_steps=num_training_steps)
 
-    # Save and push the fine-tuned model
-    trainer.save_model(output_dir)
-    tokenizer.save_pretrained(output_dir)
-    if args.push_to_hub:
-        trainer.push_to_hub()
+    # Training loop
+    for epoch in range(args.epochs):
+        model.train()
+        train_sampler.set_epoch(epoch)  # Shuffle data for each epoch
+        progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch + 1} [Global Rank {rank}]", disable=rank != 0)
+        for batch in progress_bar:
+            batch = {k: v.to(local_rank) for k, v in batch.items()}
+            outputs = model(**batch)
+            loss = outputs.loss
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            lr_scheduler.step()
+            progress_bar.set_postfix({"loss": loss.item()})
 
-if __name__ == "__main__":
+        # Evaluation loop
+        model.eval()
+        eval_loss = 0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for batch in eval_dataloader:
+                batch = {k: v.to(local_rank) for k, v in batch.items()}
+                outputs = model(**batch)
+                predictions = torch.argmax(outputs.logits, dim=-1)
+                labels = batch["labels"]
+                loss = torch.nn.functional.cross_entropy(outputs.logits, labels, reduction="sum")
+                eval_loss += loss.item()
+                correct += (predictions == labels).sum().item()
+                total += labels.size(0)
+
+        eval_loss /= total
+        accuracy = correct / total
+        if rank == 0:
+            print(f"Epoch {epoch + 1}: Eval Loss = {eval_loss:.4f}, Accuracy = {accuracy:.4f}")
+
+    # Save the model (only on rank 0)
+    if rank == 0:
+        output_dir = os.path.join(args.shared_fs_path, args.experiment_name)
+        os.makedirs(output_dir, exist_ok=True)
+        model.module.save_pretrained(output_dir)
+        tokenizer.save_pretrained(output_dir)
+        print("Training complete!")
+
+    cleanup()
+
+
+def main():
+    # Read environment variables set by torchrun
+    world_size = int(os.environ["WORLD_SIZE"])  # Total number of processes
+    rank = int(os.environ["RANK"])  # Global rank of the current process
+    local_rank = int(os.environ["LOCAL_RANK"])  # Rank of the process on the current node
+
+    print(f"Starting training with world size {world_size}, rank {rank}, and local rank {local_rank}.")
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size per GPU")
     parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
     parser.add_argument("--learning_rate", type=float, default=2e-5, help="Learning rate")
-    parser.add_argument("--experiment_name", type=str, default="default-experiment", help="Name for this experiment (used for output directory)")
-    parser.add_argument("--shared_fs_path", type=str, default="/shared", help="Path to shared filesystem (PVC mount)")
-    parser.add_argument("--push_to_hub", action="store_true", help="Push the model to Hugging Face Hub")
-    parser.add_argument("--hub_model_id", type=str, help="Model ID for Hugging Face Hub (e.g., username/model-name)")
-    parser.add_argument("--hub_token", type=str, help="Hugging Face Hub token")
+    parser.add_argument("--experiment_name", type=str, default="default-experiment", help="Name for this experiment")
+    parser.add_argument("--shared_fs_path", type=str, default="/shared", help="Path to shared filesystem")
+    parser.add_argument("--train_dataset_range", type=int, default=1000, help="Number of training samples to use")
+    parser.add_argument("--eval_dataset_range", type=int, default=200, help="Number of evaluation samples to use")
     args = parser.parse_args()
-    main(args)
+
+    train(rank, world_size, args)
+
+    # Spawn processes for distributed training
+    #mp.spawn(train, args=(world_size, args), nprocs=int(os.environ["NPROC_PER_NODE"]), join=True)
+
+
+if __name__ == "__main__":
+    main()

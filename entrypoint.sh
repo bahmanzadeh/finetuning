@@ -1,17 +1,23 @@
 #!/bin/bash
-# Entry point script for distributed training with accelerate
+# Entry point script for distributed training with PyTorch DDP using torchrun
 
-# Extract the NODE_RANK from the pod hostname 
-POD_NAME=$(hostname)
-export NODE_RANK=$(echo $POD_NAME | awk -F'-' '{print $NF}')
+# Debugging information
+echo "NODE_RANK=${NODE_RANK}"
+echo "WORLD_SIZE=${WORLD_SIZE}"
+echo "NNODES=${NNODES}"
+echo "NPROC_PER_NODE=${NPROC_PER_NODE}"
+echo "MASTER_ADDR=${MASTER_ADDR}"
+echo "MASTER_PORT=${MASTER_PORT}"
 
-# Run the accelerate launcher
-exec accelerate launch \
-    --num_processes ${NPROC_PER_NODE} \
-    --num_machines ${NNODES} \
-    --machine_rank ${NODE_RANK} \
-    --main_process_ip ${MASTER_ADDR} \
-    --main_process_port ${MASTER_PORT} \
-    --mixed_precision no \
-    --dynamo_backend no \
+if [ "${NODE_RANK}" -eq "0" ]; then
+    echo "Labeling the master pod: ${POD_NAME} with role=master"
+    kubectl label pod "${POD_NAME}" -n "${NAMESPACE}" role=master --overwrite
+fi
+
+exec torchrun \
+    --nproc_per_node=${NPROC_PER_NODE} \
+    --nnodes=${NNODES} \
+    --node_rank=${NODE_RANK} \
+    --master_addr=${MASTER_ADDR} \
+    --master_port=${MASTER_PORT} \
     fine-tune.py "$@"
