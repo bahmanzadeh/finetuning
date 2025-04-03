@@ -132,6 +132,11 @@ kubectl apply -f fine-tune-job.yaml -n finetune
 kubectl apply -f tensorboard-deploy.yaml -n finetune
 kubectl apply -f tensorboard-service.yaml -n finetune
 kubectl port-forward service/tensorboard-service 6006:6006 -n finetune
+Tensorboard: http://127.0.0.1:6006/
+```
+## Monitoring GPU utilization on the pods
+```bash
+kubectl get pods -n finetune -o name | grep 'fine-tune-job' | xargs -I POD kubectl exec -n finetune POD -- nvidia-smi
 ```
 
 ## Delete the node group

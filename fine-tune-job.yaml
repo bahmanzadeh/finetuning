@@ -63,9 +63,9 @@ spec:
         - name: TOKENIZERS_PARALLELISM
           value: "false"
         - name: TRAIN_DATASET_RANGE
-          value: "1000" # Default value for training dataset range
+          value: "4000" # Default value for training dataset range
         - name: EVAL_DATASET_RANGE
-          value: "200" # Default value for evaluation dataset range
+          value: "400" # Default value for evaluation dataset range
         resources:
           requests:
             memory: "10Gi" # Minimum memory guaranteed for the pod

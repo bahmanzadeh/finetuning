@@ -31,3 +31,16 @@ spec:
         - name: shared-fs
           persistentVolumeClaim:
             claimName: shared-fs-pvc  # Use the same PVC as your training job
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tensorboard-service
+spec:
+  type: ClusterIP
+  selector:
+    app: tensorboard
+  ports:
+  - port: 6006
+    targetPort: 6006
+    protocol: TCP 

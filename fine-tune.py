@@ -39,28 +39,6 @@ def cleanup():
     dist.destroy_process_group()
 
 
-def load_model_with_barrier(model_name, num_labels=2, ignore_mismatched_sizes=True):
-    """Load a model with a distributed barrier to avoid concurrent downloads."""
-    os.environ["TRANSFORMERS_NO_ADVISORY_LOCKS"] = "1"
-
-    if dist.get_rank() == 0:
-        # Rank 0 downloads the model
-        model = AutoModelForSequenceClassification.from_pretrained(
-            model_name,
-            num_labels=num_labels,
-            ignore_mismatched_sizes=ignore_mismatched_sizes
-        )
-    dist.barrier()  # Synchronize all processes
-    if dist.get_rank() != 0:
-        # Other ranks load the model after synchronization
-        model = AutoModelForSequenceClassification.from_pretrained(
-            model_name,
-            num_labels=num_labels,
-            ignore_mismatched_sizes=ignore_mismatched_sizes
-        )
-    return model
-
-
 def train(rank, world_size, args):
     """Main training function for each process."""
     # Setup distributed training
@@ -69,18 +47,16 @@ def train(rank, world_size, args):
     # Debug: Print rank-specific information
     print(f"[Rank {rank}] Starting training with world size {world_size}.")
     local_rank = int(os.environ["LOCAL_RANK"])
+    
     # Load dataset
     dataset = load_dataset("glue", "sst2")
     train_dataset = dataset["train"].shuffle(seed=42).select(range(args.train_dataset_range))
     eval_dataset = dataset["validation"].select(range(args.eval_dataset_range))
-
+  
     # Load tokenizer
     model_name = "distilbert-base-uncased"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-    # Load model using the barrier function
-    # model = load_model_with_barrier(model_name).to(rank)
-    
+      
     # load model
     model = AutoModelForSequenceClassification.from_pretrained(
         model_name,
@@ -92,9 +68,11 @@ def train(rank, world_size, args):
     def preprocess_function(examples):
         return tokenizer(examples["sentence"], truncation=True, padding="max_length", max_length=128)
 
+
     train_dataset = train_dataset.map(preprocess_function, batched=True)
     eval_dataset = eval_dataset.map(preprocess_function, batched=True)
-
+    dist.barrier() # Ensure all ranks finish mapping
+    
     train_dataset.set_format("torch", columns=["input_ids", "attention_mask", "label"])
     eval_dataset.set_format("torch", columns=["input_ids", "attention_mask", "label"])
 
@@ -119,7 +97,8 @@ def train(rank, world_size, args):
     for epoch in range(args.epochs):
         model.train()
         train_sampler.set_epoch(epoch)  # Shuffle data for each epoch
-        progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch + 1} [Global Rank {rank}]", disable=rank != 0)
+        progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch + 1} [Global Rank {rank}]")
+        #progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch + 1} [Global Rank {rank}]", disable=rank != 0)
         for batch in progress_bar:
             batch = {k: v.to(local_rank) for k, v in batch.items()}
             outputs = model(**batch)
@@ -148,8 +127,8 @@ def train(rank, world_size, args):
 
         eval_loss /= total
         accuracy = correct / total
-        if rank == 0:
-            print(f"Epoch {epoch + 1}: Eval Loss = {eval_loss:.4f}, Accuracy = {accuracy:.4f}")
+        #if rank == 0:
+        print(f"Epoch {epoch + 1}: Eval Loss = {eval_loss:.4f}, Accuracy = {accuracy:.4f}")
 
     # Save the model (only on rank 0)
     if rank == 0:
@@ -157,7 +136,7 @@ def train(rank, world_size, args):
         os.makedirs(output_dir, exist_ok=True)
         model.module.save_pretrained(output_dir)
         tokenizer.save_pretrained(output_dir)
-        print("Training complete!")
+    print("Training complete!")
 
     cleanup()
 
@@ -181,10 +160,6 @@ def main():
     args = parser.parse_args()
 
     train(rank, world_size, args)
-
-    # Spawn processes for distributed training
-    #mp.spawn(train, args=(world_size, args), nprocs=int(os.environ["NPROC_PER_NODE"]), join=True)
-
 
 if __name__ == "__main__":
     main()
