@@ -152,7 +152,6 @@ nebius mk8s node-group delete --id $NB_K8S_NODE_GROUP_ID
 ----
 # fine-tune.py - Explained
 Initialization of Distributed Training (setup function):
-
 This step initializes the process group using torch.distributed.init_process_group. This sets up the communication backend (in this case, "nccl" which is optimized for GPUs) and establishes connections between the different processes (nodes/GPUs) involved in the distributed training. It also sets the current process's GPU device based on its local rank.
 
 Loading Dataset:
