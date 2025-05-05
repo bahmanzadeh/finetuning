@@ -172,9 +172,8 @@ This step ensures that all distributed processes have finished the potentially t
 
 Setting Dataset Format:
 The format of the training and evaluation datasets is set to "torch", and the relevant columns ("input_ids", "attention_mask", "label") are specified. This prepares the datasets to be used with PyTorch DataLoader.
+
 Creation of train_sampler and eval_sampler:
-
-
 DistributedSampler is created for both the training and evaluation datasets. These samplers are responsible for partitioning the data across the different processes in the distributed training setup. Each process will only receive a subset of the data based on its rank and the total number of processes (world_size). The train_sampler shuffles the data within its partition for each epoch, while eval_sampler does not.
 
 Creation of train_dataloader and eval_dataloader:
