@@ -149,3 +149,77 @@ export NB_K8S_NODE_GROUP_ID=$(nebius mk8s node-group get-by-name \
 echo $NB_K8S_NODE_GROUP_ID
 nebius mk8s node-group delete --id $NB_K8S_NODE_GROUP_ID
 ```
+----
+# fine-tune.py - Explained
+Initialization of Distributed Training (setup function):
+
+This step initializes the process group using torch.distributed.init_process_group. This sets up the communication backend (in this case, "nccl" which is optimized for GPUs) and establishes connections between the different processes (nodes/GPUs) involved in the distributed training. It also sets the current process's GPU device based on its local rank.
+
+Loading Dataset:
+The code uses the datasets library to load the "glue" dataset, specifically the "sst2" task (a sentiment analysis dataset). It then shuffles the training data and selects a subset of both the training and validation datasets based on the train_dataset_range and eval_dataset_range arguments.
+
+Loading Tokenizer:
+An AutoTokenizer is loaded based on the "distilbert-base-uncased" pretrained model. The tokenizer is responsible for converting the raw text data into numerical inputs that the model can understand.
+
+Loading Model:
+An AutoModelForSequenceClassification is loaded, also based on the "distilbert-base-uncased" pretrained model. This model is a DistilBERT model with a classification head on top, suitable for sequence classification tasks like sentiment analysis. The model is then moved to the specific GPU assigned to the current process (local_rank).
+
+Preprocessing Datasets:
+A preprocess_function is defined to tokenize the "sentence" column of the datasets. This function truncates and pads the sequences to a maximum length of 128. The map function is then used to apply this preprocessing function to both the training and evaluation datasets in batches.
+
+Synchronization After Preprocessing (dist.barrier()):
+This step ensures that all distributed processes have finished the potentially time-consuming data preprocessing step before proceeding further. This is crucial to prevent issues where some processes might be waiting for data that hasn't been fully prepared by others.
+
+Setting Dataset Format:
+The format of the training and evaluation datasets is set to "torch", and the relevant columns ("input_ids", "attention_mask", "label") are specified. This prepares the datasets to be used with PyTorch DataLoader.
+Creation of train_sampler and eval_sampler:
+
+
+DistributedSampler is created for both the training and evaluation datasets. These samplers are responsible for partitioning the data across the different processes in the distributed training setup. Each process will only receive a subset of the data based on its rank and the total number of processes (world_size). The train_sampler shuffles the data within its partition for each epoch, while eval_sampler does not.
+
+Creation of train_dataloader and eval_dataloader:
+DataLoader instances are created for the training and evaluation datasets. These data loaders provide an iterable over the datasets, yielding batches of data. The sampler argument is set to the respective DistributedSampler, ensuring that each process only iterates over its assigned portion of the data. DataCollatorWithPadding is used to pad the sequences within each batch to a consistent length.
+
+Wrapping the model with DDP:
+The loaded model is wrapped with DistributedDataParallel (DDP). This is the core of PyTorch's distributed training capability. DDP handles the communication of gradients between the different processes during the backward pass, ensuring that the model weights are updated consistently across all processes. The device_ids argument specifies which GPU the model should reside on for the current process.
+
+Setting up the optimizer and scheduler:
+An AdamW optimizer is initialized with the model's parameters and a specified learning rate. The AdamW optimizer is a common choice for training Transformer models.
+A learning rate scheduler (get_scheduler) is set up. In this case, a "linear" scheduler is used, which will linearly decrease the learning rate over the course of training. The num_warmup_steps is set to 0, and num_training_steps is calculated based on the number of epochs and the size of the training data loader.
+
+Entering the training loop:
+The code then enters a loop that iterates for the specified number of epochs.
+
+Training Epoch:
+Inside each epoch, the model is set to training mode (model.train()).
+The train_sampler's epoch is set to the current epoch number to ensure different shuffling of data in each epoch across the distributed processes.
+The code iterates through the train_dataloader, processing batches of training data.
+For each batch:
+The batch is moved to the current GPU.
+The model's forward pass is performed to get the output (including the loss).
+The gradients are reset using optimizer.zero_grad().
+The loss is backpropagated using loss.backward().
+The optimizer updates the model's parameters using optimizer.step().
+The learning rate scheduler updates the learning rate using lr_scheduler.step().
+A progress bar (only visible on rank 0) displays the training progress and the current loss.
+
+Evaluation loop:
+After each training epoch, the model is set to evaluation mode (model.eval()).
+Variables are initialized to track evaluation loss, correct predictions, and total number of samples.
+The code iterates through the eval_dataloader without calculating gradients (with torch.no_grad()).
+For each batch:
+The batch is moved to the current GPU.
+The model's forward pass is performed to get the output logits.
+Predictions are obtained by taking the argmax of the logits.
+The evaluation loss is calculated using cross-entropy.
+The number of correct predictions and the total number of samples are accumulated.
+
+Evaluation Metrics Reporting:
+After evaluating the entire evaluation dataset, the average evaluation loss and accuracy are calculated.
+If the current process is rank 0, these evaluation metrics are printed.
+
+Saving the Model:
+After all epochs are completed, if the current process is rank 0, the trained model's state and the tokenizer's configuration are saved to a specified output directory on the shared filesystem. Saving is typically done only by the master process to avoid redundant saves.
+
+Cleanup (cleanup function):
+Finally, the cleanup function is called to destroy the distributed process group, releasing the resources used for distributed training.
