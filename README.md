@@ -127,6 +127,8 @@ helm upgrade csi-mounted-fs-path ./csi-mounted-fs-path-0.1.2.tgz --install \
 docker build -t rezabah/distilbert-ft:v1 .
 docker push rezabah/distilbert-ft:v1
 kubectl apply -f pvc.yaml -n finetune
+kubectl apply -f role.yaml -n fine-tune
+kubectl apply -f rolebinding.yaml -n finetune
 kubectl apply -f master-service.yaml -n finetune
 kubectl apply -f fine-tune-job.yaml -n finetune
 kubectl apply -f tensorboard-deploy.yaml -n finetune
