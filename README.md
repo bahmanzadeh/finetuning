@@ -1,7 +1,9 @@
 
-# Nebius Fine Tuning Project
+# Model Fine-Tuning Project
 
-Prepare an end-to-end example of multi-node fine-tuning of an LLM
+Prepare an end-to-end example of multi-node fine-tuning of an LLM Model
+This project is implemented on Nebius AI cloud infrastructure:
+https://nebius.com/
 
 ## K8s Cluster Setup
 ### Create a two nodes K8s cluster with total capacity as below:
